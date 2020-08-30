@@ -1,0 +1,16 @@
+#
+# A3 SYSTEM sprl-bvba
+# All rights reserved 2006-2020, A3-SYSTEM sprl-bvba
+# Based on https://kifarunix.com/install-openvas-10-gvm-on-debian-10-buster/
+
+FROM debian:buster
+
+LABEL maintainer=Thomas.Smets@a3-system.eu
+
+ENV DEBUG=True
+
+
+WORKDIR /tmp
+COPY RawInstallScript.sh .
+RUN chmod 744 /tmp/RawInstallScript.sh 
+RUN /tmp/RawInstallScript.sh 

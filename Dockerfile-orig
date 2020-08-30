@@ -1,0 +1,482 @@
+#
+# A3 SYSTEM sprl-bvba
+# All rights reserved 2006-2020, A3-SYSTEM sprl-bvba
+# Based on https://kifarunix.com/install-openvas-10-gvm-on-debian-10-buster/
+FROM debian:stable
+
+LABEL maintainer=lammens.michel@gmail.com
+LABEL maintainer=Thomas.Smets@a3-system.eu
+
+ENV DEBUG=False
+
+RUN apt update && apt upgrade && apt install -y bison cmake gcc gcc-mingw-w64 heimdal-dev libgcrypt20-dev libglib2.0-dev libgnutls28-dev libgpgme-dev libhiredis-dev libksba-dev libmicrohttpd-dev git libpcap-dev libpopt-dev libsnmp-dev libsqlite3-dev libssh-gcrypt-dev xmltoman libxml2-dev perl-base pkg-config python3-paramiko python3-setuptools uuid-dev curl redis doxygen libical-dev python-polib gnutls-bin 
+
+# Install Yarn JavaScript package manager
+RUN curl -sS https://dl.yarnpkg.com/debian/pubkey.gpg | apt-key add -
+RUN echo "deb https://dl.yarnpkg.com/debian/ stable main" | tee /etc/apt/sources.list.d/yarn.list
+
+RUN apt update
+RUN apt install yarn
+
+# You can confirm the required dependencies for each module on the INSTALL.md file on the source code directory.
+# Download Greenborne Vulnerability Manager Source code
+
+# Installation of OpenVAS 10 (GVM 10) on Debian 10 Buster involves building different modules from the source code. 
+# Hence, run the commands below to download the source code of each module required to build OpenVAS 10 (Greenborne Vulnerability Manager).
+
+# Create a temporary directory to store source codes.
+
+RUN mkdir /tmp /tmp/gvm10
+RUN cd /tmp/gvm10
+
+# Download GVM Libraries
+RUN wget https://github.com/greenbone/gvm-libs/archive/v10.0.1.tar.gz -O gvm-libs-v10.0.1.tar.gz
+
+Download OpenVAS Scanner
+RUN wget https://github.com/greenbone/openvas/archive/v6.0.1.tar.gz -O openvas-scanner-v6.0.1.tar.gz 
+
+# Download Greenborne Vulnerability Manager (GVM)
+RUN wget https://github.com/greenbone/gvmd/archive/v8.0.1.tar.gz -O gvm-v8.0.1.tar.gz
+
+# Download Greenborne Security Assistant (GSA)
+RUN wget https://github.com/greenbone/gsa/archive/v8.0.1.tar.gz -O gsa-v8.0.1.tar.gz
+
+# Download Open Scanner Protocol Daemon (OSPd)
+RUN wget https://github.com/greenbone/ospd/archive/v1.3.2.tar.gz -O ospd-v1.3.2.tar.gz
+
+# Download OpenVAS SMB
+RUN wget https://github.com/greenbone/openvas-smb/archive/v1.0.5.tar.gz -O openvas-smp-v1.0.5.tar.gz
+
+You should now have at least 5 major components source codes;
+
+ls -1
+
+gsa-v8.0.1.tar.gz
+gvm-libs-v10.0.1.tar.gz
+gvm-v8.0.1.tar.gz
+openvas-scanner-v6.0.1.tar.gz
+openvas-smp-v1.0.5.tar.gz
+ospd-v1.3.2.tar.gz
+
+Extract the OpenVAS 10 (GVM) Source Codes
+
+Next extract the source codes to current directory.
+
+for i in *.tar.gz; do tar xzf $i; done
+
+Install OpenVAS 10 (GVM) on Debian 10 Buster
+
+Navigate to a directory where you extracted your source code and build each component of OpenVAS 10. Note for every component, there is a README.md and a INSTALL.md file that explains how to build and install it.
+Build and Install GVM Libraries
+
+cd gvm-libs-10.0.1/
+mkdir build
+cd build/
+cmake ..
+make
+make install
+
+Build and Install OpenVAS SMB
+
+cd /tmp/gvm10/openvas-smb-1.0.5
+mkdir build
+cd build
+cmake ..
+make
+make install
+
+Build and Install OSPd
+
+cd /tmp/gvm10/ospd-1.3.2
+python3 setup.py install
+
+Build and Install OpenVAS Scanner
+
+cd /tmp/gvm10/openvas-6.0.1/
+mkdir build
+cd build
+cmake ..
+make
+make install
+
+Configure Redis Server
+
+To improve the performance of Redis server, make the following configurations.
+
+    Increase the value of somaxconn in order to avoid slow clients connections issues.
+
+echo "net.core.somaxconn = 1024"  >> /etc/sysctl.conf
+
+    Redis background save may fail under low memory condition. To avoid this, enable memory overcommit (man 5 proc).
+
+echo 'vm.overcommit_memory = 1' >> /etc/sysctl.conf
+
+    To avoid creation of latencies and memory usage issues with Redis, disable Linux Kernel’s support for Transparent Huge Pages (THP). To easily work around this, create a systemd service unit for this purpose.
+
+vim /etc/systemd/system/disable_thp.service
+
+[Unit]
+Description=Disable Kernel Support for Transparent Huge Pages (THP)
+
+[Service]
+Type=simple
+ExecStart=/bin/sh -c "echo 'never' > /sys/kernel/mm/transparent_hugepage/enabled && echo 'never' > /sys/kernel/mm/transparent_hugepage/defrag"
+
+[Install]
+WantedBy=multi-user.target
+
+Reload systemd configurations;
+
+systemctl daemon-reload
+
+Start and enable this service to run on system boot.
+
+systemctl start disable_thp
+systemctl enable disable_thp
+
+Rename the default redis server configuration file and copy the redis configuration that is generated.
+
+mv /etc/redis/redis.conf /etc/redis/redis.conf.bak
+
+cp /tmp/gvm10/openvas-6.0.1/build/doc/redis_config_examples/redis_4_0.conf  /etc/redis/redis.conf
+
+Open the configuration and make the adjustments below;
+
+vim /etc/redis/redis.conf
+
+#unixsocket /tmp/redis-server.sock
+unixsocket /var/run/redis/redis-server.sock
+...
+#pidfile /usr/local/var/run/openvas-redis.pid
+pidfile /var/run/redis/redis-server.pid
+...
+# Change the working directory to /var/lib/redis
+dir ./
+dir /var/lib/redis
+
+Since redis uses /tm/redis.socket, you need to explicitly define alternate socket directory as in the above configuration in the /usr/local/etc/openvas/openvassd.conf using the db_address parameter as follows;
+
+echo "db_address = /var/run/redis/redis-server.sock" > /usr/local/etc/openvas/openvassd.conf
+
+Reload sysctl variables created above.
+
+sysctl -p
+
+Restart Redis server
+
+systemctl restart redis-server
+
+Updates the OpenVAS NVTs from Greenbone Security Feed/Community Feed
+
+greenbone-nvt-sync
+
+Reload Kernel modules and start OpenVAS Scanner
+
+ldconfig && openvassd
+
+You can check the logs to see if there is any issue with OpenVAS scanner.
+
+tail /usr/local/var/log/gvm/openvassd.log 
+
+sd   main:MESSAGE:2019-07-20 15h29.32 utc:8258: openvassd 6.0.1 started
+
+You can also check running processes.
+
+ps aux | grep openvas
+
+root      8258  0.0  0.1  34520  3256 ?        Ss   11:28   0:00 openvassd: Waiting for incoming connections
+
+Build and Install GVM
+
+cd /tmp/gvm10/gvmd-8.0.1/
+mkdir build
+cd build
+cmake ..
+make
+make install
+
+Build and Install GSA
+
+cd /tmp/gvm10/gsa-8.0.1
+mkdir build
+cd build
+cmake ..
+make
+make install
+
+Next, run the command below to set up the create certificates for the server and clients.
+
+gvm-manage-certs -a
+
+Create OpenVAS administrative user by running the command below;
+
+gvmd --create-user openvasadmin
+
+This command generates a random password for the user. To create your own password;
+
+gvmd --create-user openvasadmin --password=StronGP@SS
+
+To reset the password of an already existing user;
+
+gvmd --user=openvasadmin --new-password=StronGP@SS
+
+Start OpenVAS Scanner, GSA and GVM services
+
+openvassd && gvmd && gsad
+
+Check the status;
+
+ps aux | grep -E "openvassd|gsad|gvmd" | grep -v grep
+
+root      8258  0.0  0.1  34520  3204 ?        Ss   11:28   0:00 openvassd: Waiting for incoming connections
+root     10351  0.0  0.1  34520  3396 ?        Ss   11:55   0:00 openvassd: Waiting for incoming connections
+root     10354  0.1  2.5 192572 78468 pts/0    S    11:55   0:00 gvmd: Waiting for incoming connections
+root     10363  0.0  0.1 429192  6000 pts/0    Sl   11:55   0:00 gsad
+root     10364  0.0  0.1 207996  3396 pts/0    Sl   11:55   0:00 gsad
+root     10379  0.0  0.1  80960  3232 ?        Ss   11:55   0:00 gpg-agent --homedir /usr/local/var/lib/gvm/gvmd/gnupg --use-standard-socket --daemon
+root     10694  0.0  0.1  34568  4928 ?        Ss   12:05   0:00 openvassd: Serving /usr/local/var/run/openvassd.sock
+
+You can also check the logs for more details on /usr/local/var/log/gvm/.
+Accessing OpenVAS 10 (GVM 10)
+
+OpenVAS 10 is setup and you can access it via the address, https://<server-IP>.
+Install OpenVAS 10 (GVM) on Debian 10 Buster
+
+Login with the username and password generated.
+Install OpenVAS 10 (GVM) on Debian 10 Buster
+
+There you go. You have successfully installed OpenVAS 10 (GVM) on Debian 10 Buster. Enjoy
+
+Related Tutorials;
+
+Install OpenVAS 9 with PostgreSQL in Ubuntu 18.04
+
+How to Add and Scan a Target for Vulnerabilities on OpenVAS Scanner
+
+How to Install and Setup OpenVAS 9 Vulnerability Scanner on Ubuntu 18.04
+
+How to Install and Use WPScan WordPress Vulnerability Scanner Ubuntu 18.04
+
+    TAGS
+    Debian 10 Buster
+    Greenborne Vulnerability manager
+    GVM
+    Openvas 10
+
+Share
+Previous article
+Install MySQL 8 on Debian 10 Buster
+Next article
+How to Install Yarn on Debian 10 Buster
+koromicha
+I am the Co-founder of Kifarunix.com, Linux and the whole FOSS enthusiast, Linux System Admin and a Blue Teamer who loves to share technological tips and hacks with others as a way of sharing knowledge as: "In vain have you acquired knowledge if you have not imparted it to others".
+RELATED ARTICLESMORE FROM AUTHOR
+Create User Account using useradd/adduser commands in Linux
+Install and Run MariaDB as a Docker Container
+Create Kibana Visualization Dashboards for ModSecurity Logs
+Process and Visualize ModSecurity Logs on ELK Stack
+Configure OpenVPN to Prompt for Credentials on Logon on Windows Systems
+Configure Request Tracker (RT) to send Mails using MSMTP via Office 365 Relay
+26 COMMENTS
+
+    Pablo Repollés July 23, 2019 At 18:59
+
+    hi,
+
+    ERROR cmae .. (Build and Install GSA)
+
+    — Configuring Greenbone Security Assistant…
+    — Looking for clang-format…
+    — clang-format not found…
+    — Install prefix: /usr/local
+    CMake Error at /usr/share/cmake-3.13/Modules/FindPackageHandleStandardArgs.cmake:137 (message):
+    Could NOT find Node (missing: NODE_EXECUTABLE) (Required is at least
+    version “8.0”)
+    Call Stack (most recent call first):
+    /usr/share/cmake-3.13/Modules/FindPackageHandleStandardArgs.cmake:378 (_FPHSA_FAILURE_MESSAGE)
+    cmake/FindNode.cmake:45 (find_package_handle_standard_args)
+    gsa/CMakeLists.txt:19 (find_package)
+
+    — Configuring incomplete, errors occurred!
+    See also “/tmp/gvm10/gsa-8.0.1/build/CMakeFiles/CMakeOutput.log”.
+    Reply
+        Amos Mibey July 23, 2019 At 23:03
+
+        Hi Pablo. Did you install Yarn?
+        Reply
+        L August 22, 2019 At 13:51
+
+        The problem as said Amos is related to yarn. You have to:
+
+        curl -sS https://dl.yarnpkg.com/debian/pubkey.gpg | apt-key add –
+        echo “deb https://dl.yarnpkg.com/debian/ stable main” | tee /etc/apt/sources.list.d/yarn.list
+        apt update
+        apt install yarn
+        Reply
+            Niko April 2, 2020 At 10:13
+
+            Solution ✅
+            Edit
+            vim tee /etc/apt/sources.list.d/yarn.list
+            And quit commas “ ”
+            deb https://dl.yarnpkg.com/debian/ stable main
+            Now update.
+            apt update
+            If works, the problem is solve.
+            Reply
+                Niko April 2, 2020 At 10:15
+
+                And install yarn.
+                apt install yarn
+                Reply
+        Luca Sasdelli October 14, 2019 At 19:50
+
+        Ive got exactly the same issue as Pablo did.
+        Of course yarn was previously installed with success.
+
+        Any hint?
+        Thanks
+        Luca
+        Reply
+            Luca Sasdelli October 14, 2019 At 19:54
+
+            Missed nodejs
+            Reply
+    Rüdiger Biernat July 24, 2019 At 20:26
+
+    I would prefer using git for downloading the code. That way you don’t need to worry about changing version numbers for the download of the source code.
+    Reply
+        Rüdiger Biernat July 24, 2019 At 21:56
+
+        It’s the master branch I was playing with. Dang. Then forget my comment.
+        Reply
+        Amos Mibey July 24, 2019 At 22:31
+
+        True that Rudiger
+        Reply
+    Tom August 8, 2019 At 13:25
+
+    Hi,
+
+    i get the following error while trying to compile openvas
+    /tmp/gvm10/openvas-6.0.1/build# make
+    Scanning dependencies of target openvas_misc_shared
+    [ 1%] Building C object misc/CMakeFiles/openvas_misc_shared.dir/bpf_share.c.o
+    /tmp/gvm10/openvas-6.0.1/misc/bpf_share.c: In function ‘bpf_open_live’:
+    /tmp/gvm10/openvas-6.0.1/misc/bpf_share.c:70:5: error: ‘pcap_lookupdev’ is deprecated: use ‘pcap_findalldevs’ and use the first device [-Werror=deprecated-declarations]
+    iface = pcap_lookupdev (errbuf);
+    ^~~~~
+    In file included from /usr/include/pcap.h:43,
+    from /tmp/gvm10/openvas-6.0.1/misc/bpf_share.c:27:
+    /usr/include/pcap/pcap.h:326:16: note: declared here
+    PCAP_API char *pcap_lookupdev(char *)
+    ^~~~~~~~~~~~~~
+    cc1: all warnings being treated as errors
+    make[2]: *** [misc/CMakeFiles/openvas_misc_shared.dir/build.make:63: misc/CMakeFiles/openvas_misc_shared.dir/bpf_share.c.o] Error 1
+    make[1]: *** [CMakeFiles/Makefile2:91: misc/CMakeFiles/openvas_misc_shared.dir/all] Error 2
+    make: *** [Makefile:163: all] Error 2
+    Reply
+    L August 22, 2019 At 13:55
+
+    Hello,
+    NVT are updates, but I cannot update Certdata & Scapdata. How can I do that?
+    Commands greenbone-certdata-sync & greenbone-scapdata-sync did not work.
+
+    Also omp was changed to gmp, but I cannot find it.
+    Regards,
+    L
+    Reply
+        DPY September 23, 2019 At 13:02
+
+        From /var/log/sysllog:
+        Sep 23 11:49:24 yaopenvas greenbone-certdata-sync: Running as root
+        Sep 23 11:49:24 yaopenvas greenbone-certdata-sync: rsync not found (required).
+
+        Try with
+        apt install rsync
+        Reply
+    W August 23, 2019 At 10:43
+
+    Thank you for this tutorial! Spent hours trying to compile and the INSTALL.md’s just aren’t enough!
+    Reply
+    J August 24, 2019 At 02:45
+
+    I’m getting this error:
+
+    /tmp/gvm10/openvas-6.0.1/nasl/nasl_http.c: In function ‘_http_req’:
+    /tmp/gvm10/openvas-6.0.1/nasl/nasl_http.c:174:38: error: format ‘%lu’ expects argument of type ‘long unsigned int’, but argument 4 has type ‘size_t’ {aka ‘unsigned int’} [-Werror=format=]
+    “Content-Length: %lu\r\n\r\n”, strlen (data));
+    ~~^ ~~~~~~~~~~~~~
+    %u
+    cc1: all warnings being treated as errors
+    make[2]: *** [nasl/CMakeFiles/openvas_nasl_shared.dir/build.make:398: nasl/CMakeFiles/openvas_nasl_shared.dir/nasl_http.c.o] Error 1
+    make[1]: *** [CMakeFiles/Makefile2:188: nasl/CMakeFiles/openvas_nasl_shared.dir/all] Error 2
+    make: *** [Makefile:163: all] Error 2
+    Reply
+    Nguyen Tien lap September 12, 2019 At 11:34
+
+    I can not creat PDF report 🙁 , pls help me
+    Reply
+        Amos Mibey September 12, 2019 At 11:54
+
+        Hi. Any error you get when you try to create the PDF?
+        Reply
+            Thierry December 11, 2019 At 19:20
+
+            apt-get install xsltproc texlive-latex-base texlive-latex-extra
+            (I’ve checked file /root/gvm10/gvmd-8.0.1/src/report_formats/PDF/generate which use xsltproc & pdflatex)
+            Reply
+    Nguyen Tien lap September 12, 2019 At 12:33
+
+    Hi, report file size 0 Kbs 🙁
+    Reply
+    Nguyen Tien lap September 12, 2019 At 13:25
+
+    I had install texlive-latex-extra but
+    CORRUPT OPENVAS PDF’S IN UBUNTU
+    Reply
+    German November 7, 2019 At 20:17
+
+    For the PDF report, install xsltproc 😉
+    Reply
+        koromicha November 8, 2019 At 22:47
+
+        Thanks for the feedback
+        Reply
+    Liyakhat Ali November 11, 2019 At 10:46
+
+    Command ‘greenbone-nvt-sync’ not found, but can be installed with:
+
+    apt install openvas-scanner
+    Reply
+    Alexandre November 19, 2019 At 23:02
+
+    Hello everyone,
+    Excellent as, thank you very much.
+    After installation, I tried to set up radius authentication and, on the GVM screen, got “Radius support not available”, can anyone help me fix it?
+
+    Alex
+    Reply
+    Dave B. May 1, 2020 At 00:23
+
+    Great instructions. Any suggestion on how to get the processes to automatically start on system boot? Thanks.
+    Reply
+    Cobar June 16, 2020 At 15:42
+
+    Thanks for this tuto . which files i have to edit if i want to access to the Web GUI from anywhere in my network?
+    Reply
+
+LEAVE A REPLY
+
+Save my name, email, and website in this browser for the next time I comment.
+
+report this ad
+Recent Posts
+
+    Create User Account using useradd/adduser commands in Linux August 5, 2020
+    Install and Run MariaDB as a Docker Container August 3, 2020
+    Create Kibana Visualization Dashboards for ModSecurity Logs July 31, 2020
+    Process and Visualize ModSecurity Logs on ELK Stack July 31, 2020
+    Configure OpenVPN to Prompt for Credentials on Logon on Windows Systems July 28, 2020
+
+
